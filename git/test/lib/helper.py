@@ -15,18 +15,21 @@ import io
 from git import Repo, Remote, GitCommandError, Git
 from git.compat import string_types
 
-GIT_REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+osp = os.path.dirname
+
+GIT_REPO = os.environ.get("GIT_PYTHON_TEST_GIT_REPO_BASE", osp(osp(osp(osp(__file__)))))
+GIT_DAEMON_PORT = os.environ.get("GIT_PYTHON_TEST_GIT_DAEMON_PORT", "9418")
 
 __all__ = (
     'fixture_path', 'fixture', 'absolute_project_path', 'StringProcessAdapter',
-    'with_rw_repo', 'with_rw_and_rw_remote_repo', 'TestBase', 'TestCase', 'GIT_REPO'
+    'with_rw_repo', 'with_rw_and_rw_remote_repo', 'TestBase', 'TestCase', 'GIT_REPO', 'GIT_DAEMON_PORT'
 )
 
 #{ Routines
 
 
 def fixture_path(name):
-    test_dir = os.path.dirname(os.path.dirname(__file__))
+    test_dir = osp(osp(__file__))
     return os.path.join(test_dir, "fixtures", name)
 
 
@@ -35,7 +38,7 @@ def fixture(name):
 
 
 def absolute_project_path():
-    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    return os.path.abspath(os.path.join(osp(__file__), "..", ".."))
 
 #} END routines
 
@@ -191,14 +194,15 @@ def with_rw_and_rw_remote_repo(working_tree_ref):
             # by the user, not by us
             d_remote = Remote.create(rw_repo, "daemon_origin", remote_repo_dir)
             d_remote.fetch()
-            remote_repo_url = "git://localhost%s" % remote_repo_dir
+            remote_repo_url = "git://localhost:%s%s" % (GIT_DAEMON_PORT, remote_repo_dir)
 
             d_remote.config_writer.set('url', remote_repo_url)
 
-            temp_dir = os.path.dirname(_mktemp())
+            temp_dir = osp(_mktemp())
             # On windows, this will fail ... we deal with failures anyway and default to telling the user to do it
             try:
-                gd = Git().daemon(temp_dir, enable='receive-pack', as_process=True)
+                gd = Git().daemon(temp_dir, enable='receive-pack', listen='127.0.0.1', port=GIT_DAEMON_PORT,
+                                  as_process=True)
                 # yes, I know ... fortunately, this is always going to work if sleep time is just large enough
                 time.sleep(0.5)
             except Exception:
@@ -221,6 +225,8 @@ def with_rw_and_rw_remote_repo(working_tree_ref):
                     raise AssertionError(msg)
                 else:
                     msg = 'Please start a git-daemon to run this test, execute: git daemon --enable=receive-pack "%s"'
+                    msg += 'You can also run the daemon on a different port by passing --port=<port>'
+                    msg += 'and setting the environment variable GIT_PYTHON_TEST_GIT_DAEMON_PORT to <port>'
                     msg %= temp_dir
                     raise AssertionError(msg)
                 # END make assertion
@@ -230,7 +236,13 @@ def with_rw_and_rw_remote_repo(working_tree_ref):
             prev_cwd = os.getcwd()
             os.chdir(rw_repo.working_dir)
             try:
-                return func(self, rw_repo, rw_remote_repo)
+                try:
+                    return func(self, rw_repo, rw_remote_repo)
+                except:
+                    print("Keeping repos after failure: repo_dir = %s, remote_repo_dir = %s"
+                          % (repo_dir, remote_repo_dir), file=sys.stderr)
+                    repo_dir = remote_repo_dir = None
+                    raise
             finally:
                 # gd.proc.kill() ... no idea why that doesn't work
                 if gd is not None:
@@ -239,8 +251,10 @@ def with_rw_and_rw_remote_repo(working_tree_ref):
                 os.chdir(prev_cwd)
                 rw_repo.git.clear_cache()
                 rw_remote_repo.git.clear_cache()
-                shutil.rmtree(repo_dir, onerror=_rmtree_onerror)
-                shutil.rmtree(remote_repo_dir, onerror=_rmtree_onerror)
+                if repo_dir:
+                    shutil.rmtree(repo_dir, onerror=_rmtree_onerror)
+                if remote_repo_dir:
+                    shutil.rmtree(remote_repo_dir, onerror=_rmtree_onerror)
 
                 if gd is not None:
                     gd.proc.wait()
@@ -274,6 +288,10 @@ class TestBase(TestCase):
       shas for your objects, be sure you choose some that are part of the immutable portion
       of the project history ( to assure tests don't fail for others ).
     """
+
+    def _small_repo_url(self):
+        """:return" a path to a small, clonable repository"""
+        return os.path.join(self.rorepo.working_tree_dir, 'git/ext/gitdb/gitdb/ext/smmap')
 
     @classmethod
     def setUpClass(cls):

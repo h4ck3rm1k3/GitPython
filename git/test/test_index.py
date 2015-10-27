@@ -12,9 +12,13 @@ from git.test.lib import (
     with_rw_repo
 )
 from git.util import Actor
-from git.exc import HookExecutionError
+from git.exc import (
+    HookExecutionError,
+    InvalidGitRepositoryError
+)
 from git import (
     IndexFile,
+    Repo,
     BlobFilter,
     UnmergedEntriesError,
     Tree,
@@ -42,6 +46,7 @@ from git.index.typ import (
     IndexEntry
 )
 from git.index.fun import hook_path
+from gitdb.test.lib import with_rw_directory
 
 
 class TestIndex(TestBase):
@@ -381,12 +386,13 @@ class TestIndex(TestBase):
         num_entries = len(index.entries)
         cur_head = rw_repo.head
 
-        uname = "Some Developer"
+        uname = u"Thomas Müller"
         umail = "sd@company.com"
         writer = rw_repo.config_writer()
         writer.set_value("user", "name", uname)
         writer.set_value("user", "email", umail)
         writer.release()
+        assert writer.get_value("user", "name") == uname
 
         # remove all of the files, provide a wild mix of paths, BaseIndexEntries,
         # IndexEntries
@@ -466,6 +472,17 @@ class TestIndex(TestBase):
         assert cur_head.commit == commit_actor
         assert cur_head.log()[-1].actor == my_committer
 
+        # commit with author_date and commit_date
+        cur_commit = cur_head.commit
+        commit_message = u"commit with dates by Avinash Sajjanshetty"
+
+        new_commit = index.commit(commit_message, author_date="2006-04-07T22:13:13", commit_date="2005-04-07T22:13:13")
+        assert cur_commit != new_commit
+        print(new_commit.authored_date, new_commit.committed_date)
+        assert new_commit.message == commit_message
+        assert new_commit.authored_date == 1144447993
+        assert new_commit.committed_date == 1112911993
+
         # same index, no parents
         commit_message = "index without parents"
         commit_no_parents = index.commit(commit_message, parent_commits=list(), head=True)
@@ -538,18 +555,22 @@ class TestIndex(TestBase):
 
         # add symlink
         if sys.platform != "win32":
-            basename = "my_real_symlink"
-            target = "/etc/that"
-            link_file = os.path.join(rw_repo.working_tree_dir, basename)
-            os.symlink(target, link_file)
-            entries = index.reset(new_commit).add([link_file], fprogress=self._fprogress_add)
-            self._assert_entries(entries)
-            self._assert_fprogress(entries)
-            assert len(entries) == 1 and S_ISLNK(entries[0].mode)
-            assert S_ISLNK(index.entries[index.entry_key("my_real_symlink", 0)].mode)
+            for target in ('/etc/nonexisting', '/etc/passwd', '/etc'):
+                basename = "my_real_symlink"
+                
+                link_file = os.path.join(rw_repo.working_tree_dir, basename)
+                os.symlink(target, link_file)
+                entries = index.reset(new_commit).add([link_file], fprogress=self._fprogress_add)
+                self._assert_entries(entries)
+                self._assert_fprogress(entries)
+                assert len(entries) == 1 and S_ISLNK(entries[0].mode)
+                assert S_ISLNK(index.entries[index.entry_key("my_real_symlink", 0)].mode)
 
-            # we expect only the target to be written
-            assert index.repo.odb.stream(entries[0].binsha).read().decode('ascii') == target
+                # we expect only the target to be written
+                assert index.repo.odb.stream(entries[0].binsha).read().decode('ascii') == target
+
+                os.remove(link_file)
+            # end for each target
         # END real symlink test
 
         # add fake symlink and assure it checks-our as symlink
@@ -669,6 +690,9 @@ class TestIndex(TestBase):
         index.add(files, write=True)
         if os.name != 'nt':
             hp = hook_path('pre-commit', index.repo.git_dir)
+            hpd = os.path.dirname(hp)
+            if not os.path.isdir(hpd):
+                os.mkdir(hpd)
             with open(hp, "wt") as fp:
                 fp.write("#!/usr/bin/env sh\necho stdout; echo stderr 1>&2; exit 1")
             # end
@@ -739,7 +763,8 @@ class TestIndex(TestBase):
         # property rw_bare_repo.working_tree_dir will return '/tmp'
         # instead of throwing the Exception we are expecting. This is
         # a quick hack to make this test fail when expected.
-        rw_bare_repo._working_tree_dir = None
+        assert rw_bare_repo.working_tree_dir is None
+        assert rw_bare_repo.bare
         contents = b'This is a BytesIO file'
         filesize = len(contents)
         fileobj = BytesIO(contents)
@@ -757,6 +782,17 @@ class TestIndex(TestBase):
         path = os.path.join('git', 'test', 'test_index.py')
         try:
             rw_bare_repo.index.add([path])
-        except Exception as e:
-            asserted = "does not have a working tree" in str(e)
+        except InvalidGitRepositoryError:
+            asserted = True
         assert asserted, "Adding using a filename is not correctly asserted."
+
+    @with_rw_directory
+    def test_add_utf8P_path(self, rw_dir):
+        # NOTE: fp is not a Unicode object in python 2 (which is the source of the problem)
+        fp = os.path.join(rw_dir, 'ø.txt')
+        with open(fp, 'wb') as fs:
+            fs.write(u'content of ø'.encode('utf-8'))
+
+        r = Repo.init(rw_dir)
+        r.index.add([fp])
+        r.index.commit('Added orig and prestable')

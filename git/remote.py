@@ -14,6 +14,7 @@ from .config import (
     cp,
 )
 from .refs import (
+    Head,
     Reference,
     RemoteReference,
     SymbolicReference,
@@ -177,8 +178,9 @@ class FetchInfo(object):
      info.note          # additional notes given by git-fetch intended for the user
      info.old_commit    # if info.flags & info.FORCED_UPDATE|info.FAST_FORWARD,
                         # field is set to the previous location of ref, otherwise None
+     info.remote_ref_path # The path from which we fetched on the remote. It's the remote's version of our info.ref
     """
-    __slots__ = ('ref', 'old_commit', 'flags', 'note')
+    __slots__ = ('ref', 'old_commit', 'flags', 'note', 'remote_ref_path')
 
     NEW_TAG, NEW_HEAD, HEAD_UPTODATE, TAG_UPDATE, REJECTED, FORCED_UPDATE, \
         FAST_FORWARD, ERROR = [1 << x for x in range(8)]
@@ -193,7 +195,7 @@ class FetchInfo(object):
                  '=': HEAD_UPTODATE,
                  ' ': FAST_FORWARD}
 
-    def __init__(self, ref, flags, note='', old_commit=None):
+    def __init__(self, ref, flags, note='', old_commit=None, remote_ref_path=None):
         """
         Initialize a new instance
         """
@@ -201,6 +203,7 @@ class FetchInfo(object):
         self.flags = flags
         self.note = note
         self.old_commit = old_commit
+        self.remote_ref_path = remote_ref_path
 
     def __str__(self):
         return self.name
@@ -243,7 +246,7 @@ class FetchInfo(object):
             new_hex_sha, fetch_operation, fetch_note = fetch_line.split("\t")
             ref_type_name, fetch_note = fetch_note.split(' ', 1)
         except ValueError:  # unpack error
-            raise ValueError("Failed to parse FETCH__HEAD line: %r" % fetch_line)
+            raise ValueError("Failed to parse FETCH_HEAD line: %r" % fetch_line)
 
         # parse flags from control_character
         flags = 0
@@ -288,6 +291,11 @@ class FetchInfo(object):
             # note: remote-tracking is just the first part of the 'remote-tracking branch' token.
             # We don't parse it correctly, but its enough to know what to do, and its new in git 1.7something
             ref_type = RemoteReference
+        elif '/' in ref_type_name:
+            # If the fetch spec look something like this '+refs/pull/*:refs/heads/pull/*', and is thus pretty
+            # much anything the user wants, we will have trouble to determine what's going on
+            # For now, we assume the local ref is a Head
+            ref_type = Head
         else:
             raise TypeError("Cannot handle reference type: %r" % ref_type_name)
         # END handle ref type
@@ -325,7 +333,7 @@ class FetchInfo(object):
 
         note = (note and note.strip()) or ''
 
-        return cls(remote_local_ref, flags, note, old_commit)
+        return cls(remote_local_ref, flags, note, old_commit, local_remote_ref)
 
 
 class Remote(LazyMixin, Iterable):
@@ -354,14 +362,14 @@ class Remote(LazyMixin, Iterable):
             # that it has the config_writer property, but instead calls __getattr__
             # which will not yield the expected results. 'pinging' the members
             # with a dir call creates the config_writer property that we require
-            # ... bugs like these make me wonder wheter python really wants to be used
+            # ... bugs like these make me wonder whether python really wants to be used
             # for production. It doesn't happen on linux though.
             dir(self)
         # END windows special handling
 
     def __getattr__(self, attr):
         """Allows to call this instance like
-        remote.special( *args, **kwargs) to call git-remote special self.name"""
+        remote.special( \*args, \*\*kwargs) to call git-remote special self.name"""
         if attr == "_config_reader":
             return super(Remote, self).__getattr__(attr)
 
@@ -378,7 +386,9 @@ class Remote(LazyMixin, Iterable):
 
     def _set_cache_(self, attr):
         if attr == "_config_reader":
-            self._config_reader = SectionConstraint(self.repo.config_reader(), self._config_section_name())
+            # NOTE: This is cached as __getattr__ is overridden to return remote config values implicitly, such as
+            # in print(r.pushurl)
+            self._config_reader = SectionConstraint(self.repo.config_reader("repository"), self._config_section_name())
         else:
             super(Remote, self)._set_cache_(attr)
 
@@ -445,7 +455,13 @@ class Remote(LazyMixin, Iterable):
             remote side, but are still available locally.
 
             The IterableList is prefixed, hence the 'origin' must be omitted. See
-            'refs' property for an example."""
+            'refs' property for an example.
+
+            To make things more complicated, it can be possble for the list to include
+            other kinds of references, for example, tag references, if these are stale
+            as well. This is a fix for the issue described here:
+            https://github.com/gitpython-developers/GitPython/issues/260
+            """
         out_refs = IterableList(RemoteReference._id_attribute_, "%s/" % self.name)
         for line in self.repo.git.remote("prune", "--dry-run", self).splitlines()[2:]:
             # expecting
@@ -453,8 +469,14 @@ class Remote(LazyMixin, Iterable):
             token = " * [would prune] "
             if not line.startswith(token):
                 raise ValueError("Could not parse git-remote prune result: %r" % line)
-            fqhn = "%s/%s" % (RemoteReference._common_path_default, line.replace(token, ""))
-            out_refs.append(RemoteReference(self.repo, fqhn))
+            ref_name = line.replace(token, "")
+            # sometimes, paths start with a full ref name, like refs/tags/foo, see #260
+            if ref_name.startswith(Reference._common_path_default + '/'):
+                out_refs.append(SymbolicReference.from_path(self.repo, ref_name))
+            else:
+                fqhn = "%s/%s" % (RemoteReference._common_path_default, ref_name)
+                out_refs.append(RemoteReference(self.repo, fqhn))
+            # end special case handlin
         # END for each line
         return out_refs
 
@@ -467,7 +489,9 @@ class Remote(LazyMixin, Iterable):
         :param kwargs: Additional arguments to be passed to the git-remote add command
         :return: New Remote instance
         :raise GitCommandError: in case an origin with that name already exists"""
-        repo.git.remote("add", name, url, **kwargs)
+        scmd = 'add'
+        kwargs['insert_kwargs_after'] = scmd
+        repo.git.remote(scmd, name, url, **kwargs)
         return cls(repo, name)
 
     # add is an alias
@@ -475,8 +499,13 @@ class Remote(LazyMixin, Iterable):
 
     @classmethod
     def remove(cls, repo, name):
-        """Remove the remote with the given name"""
+        """Remove the remote with the given name
+        :return: the passed remote name to remove
+        """
         repo.git.remote("rm", name)
+        if isinstance(name, cls):
+            name._clear_cache()
+        return name
 
     # alias
     rm = remove
@@ -489,11 +518,8 @@ class Remote(LazyMixin, Iterable):
 
         self.repo.git.remote("rename", self.name, new_name)
         self.name = new_name
-        try:
-            del(self._config_reader)        # it contains cached values, section names are different now
-        except AttributeError:
-            pass
-        # END handle exception
+        self._clear_cache()
+
         return self
 
     def update(self, **kwargs):
@@ -505,12 +531,13 @@ class Remote(LazyMixin, Iterable):
             Additional arguments passed to git-remote update
 
         :return: self """
-        self.repo.git.remote("update", self.name)
+        scmd = 'update'
+        kwargs['insert_kwargs_after'] = scmd
+        self.repo.git.remote(scmd, self.name, **kwargs)
         return self
 
     def _get_fetch_info_from_stderr(self, proc, progress):
         # skip first line as it is some remote info we are not interested in
-        # TODO: Use poll() to process stdout and stderr at same time
         output = IterableList('name')
 
         # lines which are no progress are fetch info lines
@@ -523,9 +550,10 @@ class Remote(LazyMixin, Iterable):
 
         progress_handler = progress.new_message_handler()
 
-        def my_progress_handler(line):
+        for line in proc.stderr.readlines():
+            line = line.decode(defenc)
             for pline in progress_handler(line):
-                if line.startswith('fatal:'):
+                if line.startswith('fatal:') or line.startswith('error:'):
                     raise GitCommandError(("Error when fetching: %s" % line,), 2)
                 # END handle special messages
                 for cmd in cmds:
@@ -536,9 +564,7 @@ class Remote(LazyMixin, Iterable):
                 # end for each comand code we know
             # end for each line progress didn't handle
         # end
-
-        # We are only interested in stderr here ...
-        handle_process_output(proc, None, my_progress_handler, finalize_process)
+        finalize_process(proc)
 
         # read head information
         fp = open(join(self.repo.git_dir, 'FETCH_HEAD'), 'rb')
@@ -546,8 +572,9 @@ class Remote(LazyMixin, Iterable):
         fp.close()
 
         # NOTE: We assume to fetch at least enough progress lines to allow matching each fetch head line with it.
-        assert len(fetch_info_lines) >= len(fetch_head_info), "len(%s) <= len(%s)" % (fetch_head_info,
-                                                                                      fetch_info_lines)
+        l_fil = len(fetch_info_lines)
+        l_fhi = len(fetch_head_info)
+        assert l_fil >= l_fhi, "len(%s) <= len(%s)" % (l_fil, l_fhi)
 
         output.extend(FetchInfo._from_line(self.repo, err_line, fetch_line)
                       for err_line, fetch_line in zip(fetch_info_lines, fetch_head_info))
@@ -558,7 +585,6 @@ class Remote(LazyMixin, Iterable):
         # we hope stdout can hold all the data, it should ...
         # read the lines manually as it will use carriage returns between the messages
         # to override the previous one. This is why we read the bytes manually
-        # TODO: poll() on file descriptors to know what to read next, process streams concurrently
         progress_handler = progress.new_message_handler()
         output = IterableList('name')
 
@@ -571,8 +597,24 @@ class Remote(LazyMixin, Iterable):
             # END exception handling
         # END for each line
 
-        handle_process_output(proc, stdout_handler, progress_handler, finalize_process)
+        try:
+            handle_process_output(proc, stdout_handler, progress_handler, finalize_process)
+        except Exception:
+            if len(output) == 0:
+                raise
         return output
+
+    def _assert_refspec(self):
+        """Turns out we can't deal with remotes if the refspec is missing"""
+        config = self.config_reader
+        try:
+            if config.get_value('fetch', default=type) is type:
+                msg = "Remote '%s' has no refspec set.\n"
+                msg += "You can set it as follows:"
+                msg += " 'git config --add \"remote.%s.fetch +refs/heads/*:refs/heads/*\"'." % self.name
+                raise AssertionError(msg)
+        finally:
+            config.release()
 
     def fetch(self, refspec=None, progress=None, **kwargs):
         """Fetch the latest changes for this remote
@@ -601,13 +643,15 @@ class Remote(LazyMixin, Iterable):
         :note:
             As fetch does not provide progress information to non-ttys, we cannot make
             it available here unfortunately as in the 'push' method."""
+        self._assert_refspec()
         kwargs = add_progress(kwargs, self.repo.git, progress)
         if isinstance(refspec, list):
             args = refspec
         else:
             args = [refspec]
 
-        proc = self.repo.git.fetch(self, *args, with_extended_output=True, as_process=True, v=True, **kwargs)
+        proc = self.repo.git.fetch(self, *args, with_extended_output=True, as_process=True, with_stdout=True, v=True,
+                                   **kwargs)
         res = self._get_fetch_info_from_stderr(proc, progress or RemoteProgress())
         if hasattr(self.repo.odb, 'update_cache'):
             self.repo.odb.update_cache()
@@ -621,6 +665,7 @@ class Remote(LazyMixin, Iterable):
         :param progress: see 'push' method
         :param kwargs: Additional arguments to be passed to git-pull
         :return: Please see 'fetch' method """
+        self._assert_refspec()
         kwargs = add_progress(kwargs, self.repo.git, progress)
         proc = self.repo.git.pull(self, refspec, with_extended_output=True, as_process=True, v=True, **kwargs)
         res = self._get_fetch_info_from_stderr(proc, progress or RemoteProgress())
@@ -658,6 +703,13 @@ class Remote(LazyMixin, Iterable):
             Hence you may simple type config.get("pushurl") to obtain the information"""
         return self._config_reader
 
+    def _clear_cache(self):
+        try:
+            del(self._config_reader)
+        except AttributeError:
+            pass
+        # END handle exception
+
     @property
     def config_writer(self):
         """
@@ -672,9 +724,5 @@ class Remote(LazyMixin, Iterable):
         writer = self.repo.config_writer()
 
         # clear our cache to assure we re-read the possibly changed configuration
-        try:
-            del(self._config_reader)
-        except AttributeError:
-            pass
-        # END handle exception
+        self._clear_cache()
         return SectionConstraint(writer, self._config_section_name())

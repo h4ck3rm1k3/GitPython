@@ -10,8 +10,6 @@ from stat import (
     S_IFREG,
 )
 
-S_IFGITLINK = S_IFLNK | S_IFDIR     # a submodule
-
 from io import BytesIO
 import os
 import subprocess
@@ -33,7 +31,6 @@ from .typ import (
     CE_NAMEMASK,
     CE_STAGESHIFT
 )
-CE_NAMEMASK_INV = ~CE_NAMEMASK
 
 from .util import (
     pack,
@@ -44,8 +41,12 @@ from gitdb.base import IStream
 from gitdb.typ import str_tree_type
 from git.compat import (
     defenc,
-    force_text
+    force_text,
+    force_bytes
 )
+
+S_IFGITLINK = S_IFLNK | S_IFDIR     # a submodule
+CE_NAMEMASK_INV = ~CE_NAMEMASK
 
 __all__ = ('write_cache', 'read_cache', 'write_tree_from_cache', 'entry_key',
            'stat_mode_to_index_mode', 'S_IFGITLINK', 'run_commit_hook', 'hook_path')
@@ -72,6 +73,7 @@ def run_commit_hook(name, index):
                            env=env,
                            stdout=subprocess.PIPE,
                            stderr=subprocess.PIPE,
+                           cwd=index.repo.working_dir,
                            close_fds=(os.name == 'posix'))
     stdout, stderr = cmd.communicate()
     cmd.stdout.close()
@@ -123,12 +125,13 @@ def write_cache(entries, stream, extension_data=None, ShaStreamCls=IndexFileSHA1
         write(entry[4])         # ctime
         write(entry[5])         # mtime
         path = entry[3]
+        path = force_bytes(path, encoding=defenc)
         plen = len(path) & CE_NAMEMASK      # path length
         assert plen == len(path), "Path %s too long to fit into index" % entry[3]
         flags = plen | (entry[2] & CE_NAMEMASK_INV)     # clear possible previous values
         write(pack(">LLLLLL20sH", entry[6], entry[7], entry[0],
                    entry[8], entry[9], entry[10], entry[1], flags))
-        write(path.encode(defenc))
+        write(path)
         real_size = ((tell() - beginoffset + 8) & ~7)
         write(b"\0" * ((beginoffset + real_size) - tell()))
     # END for each entry

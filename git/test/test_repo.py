@@ -1,3 +1,4 @@
+#-*-coding:utf-8-*-
 # test_repo.py
 # Copyright (C) 2008, 2009 Michael Trier (mtrier@gmail.com) and contributors
 #
@@ -32,7 +33,10 @@ from git import (
 )
 from git.repo.fun import touch
 from git.util import join_path_native
-from git.exc import BadObject
+from git.exc import (
+    BadObject,
+    WorkTreeRepositoryUnsupported
+)
 from gitdb.util import bin_to_hex
 from git.compat import string_types
 from gitdb.test.lib import with_rw_directory
@@ -41,7 +45,10 @@ import os
 import sys
 import tempfile
 import shutil
+import itertools
 from io import BytesIO
+
+from nose import SkipTest
 
 
 class TestRepo(TestBase):
@@ -164,6 +171,7 @@ class TestRepo(TestBase):
                 r = Repo.init(path=path, bare=True)
                 assert isinstance(r, Repo)
                 assert r.bare is True
+                assert not r.has_separate_working_tree()
                 assert os.path.isdir(r.git_dir)
 
                 self._assert_empty_repo(r)
@@ -200,6 +208,7 @@ class TestRepo(TestBase):
             os.chdir(git_dir_rela)
             r = Repo.init(bare=False)
             assert r.bare is False
+            assert not r.has_separate_working_tree()
 
             self._assert_empty_repo(r)
         finally:
@@ -322,17 +331,21 @@ class TestRepo(TestBase):
         assert len(res) == 1
         assert len(res[0][1]) == 83, "Unexpected amount of parsed blame lines"
 
-    def test_untracked_files(self):
-        base = self.rorepo.working_tree_dir
-        files = (join_path_native(base, "__test_myfile"),
-                 join_path_native(base, "__test_other_file"))
-        num_recently_untracked = 0
-        try:
+    @with_rw_repo('HEAD', bare=False)
+    def test_untracked_files(self, rwrepo):
+        for (run, repo_add) in enumerate((rwrepo.index.add, rwrepo.git.add)):
+            base = rwrepo.working_tree_dir
+            files = (join_path_native(base, u"%i_test _myfile" % run),
+                     join_path_native(base, "%i_test_other_file" % run),
+                     join_path_native(base, u"%i__çava verböten" % run),
+                     join_path_native(base, u"%i_çava-----verböten" % run))
+
+            num_recently_untracked = 0
             for fpath in files:
                 fd = open(fpath, "wb")
                 fd.close()
             # END for each filename
-            untracked_files = self.rorepo.untracked_files
+            untracked_files = rwrepo.untracked_files
             num_recently_untracked = len(untracked_files)
 
             # assure we have all names - they are relative to the git-dir
@@ -340,13 +353,10 @@ class TestRepo(TestBase):
             for utfile in untracked_files:
                 num_test_untracked += join_path_native(base, utfile) in files
             assert len(files) == num_test_untracked
-        finally:
-            for fpath in files:
-                if os.path.isfile(fpath):
-                    os.remove(fpath)
-        # END handle files
 
-        assert len(self.rorepo.untracked_files) == (num_recently_untracked - len(files))
+            repo_add(untracked_files)
+            assert len(rwrepo.untracked_files) == (num_recently_untracked - len(files))
+        # end for each run
 
     def test_config_reader(self):
         reader = self.rorepo.config_reader()                # all config files
@@ -553,7 +563,7 @@ class TestRepo(TestBase):
         # start from reference
         num_resolved = 0
 
-        for ref in Reference.iter_items(self.rorepo):
+        for ref_no, ref in enumerate(Reference.iter_items(self.rorepo)):
             path_tokens = ref.path.split("/")
             for pt in range(len(path_tokens)):
                 path_section = '/'.join(path_tokens[-(pt + 1):])
@@ -567,6 +577,8 @@ class TestRepo(TestBase):
                     pass
                 # END exception handling
             # END for each token
+            if ref_no == 3 - 1:
+                break
         # END for each reference
         assert num_resolved
 
@@ -589,8 +601,8 @@ class TestRepo(TestBase):
         commit = rev_parse(first_rev)
         assert len(commit.parents) == 0
         assert commit.hexsha == first_rev
-        self.failUnlessRaises(BadObject, rev_parse, first_rev + "~")
-        self.failUnlessRaises(BadObject, rev_parse, first_rev + "^")
+        self.failUnlessRaises(BadName, rev_parse, first_rev + "~")
+        self.failUnlessRaises(BadName, rev_parse, first_rev + "^")
 
         # short SHA1
         commit2 = rev_parse(first_rev[:20])
@@ -650,7 +662,7 @@ class TestRepo(TestBase):
         assert rev_parse('@{1}') != head.commit
 
     def test_repo_odbtype(self):
-        target_type = GitDB
+        target_type = GitCmdObjectDB
         if sys.version_info[:2] < (2, 5):
             target_type = GitCmdObjectDB
         assert isinstance(self.rorepo.odb, target_type)
@@ -759,3 +771,29 @@ class TestRepo(TestBase):
 
         # Test for no merge base - can't do as we have
         self.failUnlessRaises(GitCommandError, repo.merge_base, c1, 'ffffff')
+
+    def test_is_ancestor(self):
+        repo = self.rorepo
+        c1 = 'f6aa8d1'
+        c2 = '763ef75'
+        self.assertTrue(repo.is_ancestor(c1, c1))
+        self.assertTrue(repo.is_ancestor("master", "master"))
+        self.assertTrue(repo.is_ancestor(c1, c2))
+        self.assertTrue(repo.is_ancestor(c1, "master"))
+        self.assertFalse(repo.is_ancestor(c2, c1))
+        self.assertFalse(repo.is_ancestor("master", c1))
+        for i, j in itertools.permutations([c1, 'ffffff', ''], r=2):
+            self.assertRaises(GitCommandError, repo.is_ancestor, i, j)
+
+    @with_rw_directory
+    def test_work_tree_unsupported(self, rw_dir):
+        git = Git(rw_dir)
+        if git.version_info[:3] < (2, 5, 1):
+            raise SkipTest("worktree feature unsupported")
+
+        rw_master = self.rorepo.clone(join_path_native(rw_dir, 'master_repo'))
+        rw_master.git.checkout('HEAD~10')
+        worktree_path = join_path_native(rw_dir, 'worktree_repo')
+        rw_master.git.worktree('add', worktree_path, 'master')
+
+        self.failUnlessRaises(WorkTreeRepositoryUnsupported, Repo, worktree_path)

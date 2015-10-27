@@ -88,25 +88,25 @@ class SymbolicReference(object):
         """Returns an iterator yielding pairs of sha1/path pairs (as bytes) for the corresponding refs.
         :note: The packed refs file will be kept open as long as we iterate"""
         try:
-            fp = open(cls._get_packed_refs_path(repo), 'rt')
-            for line in fp:
-                line = line.strip()
-                if not line:
-                    continue
-                if line.startswith('#'):
-                    if line.startswith('# pack-refs with:') and not line.endswith('peeled'):
-                        raise TypeError("PackingType of packed-Refs not understood: %r" % line)
-                    # END abort if we do not understand the packing scheme
-                    continue
-                # END parse comment
+            with open(cls._get_packed_refs_path(repo), 'rt') as fp:
+                for line in fp:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    if line.startswith('#'):
+                        if line.startswith('# pack-refs with:') and not line.endswith('peeled'):
+                            raise TypeError("PackingType of packed-Refs not understood: %r" % line)
+                        # END abort if we do not understand the packing scheme
+                        continue
+                    # END parse comment
 
-                # skip dereferenced tag object entries - previous line was actual
-                # tag reference for it
-                if line[0] == '^':
-                    continue
+                    # skip dereferenced tag object entries - previous line was actual
+                    # tag reference for it
+                    if line[0] == '^':
+                        continue
 
-                yield tuple(line.split(' ', 1))
-            # END for each line
+                    yield tuple(line.split(' ', 1))
+                # END for each line
         except (OSError, IOError):
             raise StopIteration
         # END no packed-refs file handling
@@ -140,6 +140,7 @@ class SymbolicReference(object):
             # Don't only split on spaces, but on whitespace, which allows to parse lines like
             # 60b64ef992065e2600bfef6187a97f92398a9144                branch 'master' of git-server:/path/to/repo
             tokens = value.split()
+            assert(len(tokens) != 0)
         except (OSError, IOError):
             # Probably we are just packed, find our entry in the packed refs file
             # NOTE: We are not a symbolic ref if we are in a packed file, as these
@@ -264,7 +265,7 @@ class SymbolicReference(object):
         symbolic one.
 
         :param ref: SymbolicReference instance, Object instance or refspec string
-            Only if the ref is a SymbolicRef instance, we will point to it. Everthiny
+            Only if the ref is a SymbolicRef instance, we will point to it. Everthing
             else is dereferenced to obtain the actual object.
         :param logmsg: If set to a string, the message will be used in the reflog.
             Otherwise, a reflog entry is not written for the changed reference.
@@ -582,6 +583,8 @@ class SymbolicReference(object):
             # END prune non-refs folders
 
             for f in files:
+                if f == 'packed-refs':
+                    continue
                 abs_path = to_native_path_linux(join_path(root, f))
                 rela_paths.add(abs_path.replace(to_native_path_linux(repo.git_dir) + '/', ""))
             # END for each file in root directory

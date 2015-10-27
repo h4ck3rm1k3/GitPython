@@ -27,7 +27,8 @@ from .util import (
 import git.diff as diff
 from git.exc import (
     GitCommandError,
-    CheckoutError
+    CheckoutError,
+    InvalidGitRepositoryError
 )
 
 from git.objects import (
@@ -54,6 +55,7 @@ from git.util import (
     join_path_native,
     file_contents_ro,
     to_native_path_linux,
+    unbare_repo
 )
 
 from .fun import (
@@ -170,16 +172,17 @@ class IndexFile(LazyMixin, diff.Diffable, Serializable):
         """:return: list of entries, in a sorted fashion, first by path, then by stage"""
         return sorted(self.entries.values(), key=lambda e: (e.path, e.stage))
 
-    def _serialize(self, stream, ignore_tree_extension_data=False):
+    def _serialize(self, stream, ignore_extension_data=False):
         entries = self._entries_sorted()
-        write_cache(entries,
-                    stream,
-                    (ignore_tree_extension_data and None) or self._extension_data)
+        extension_data = self._extension_data
+        if ignore_extension_data:
+            extension_data = None
+        write_cache(entries, stream, extension_data)
         return self
 
     #} END serializable interface
 
-    def write(self, file_path=None, ignore_tree_extension_data=False):
+    def write(self, file_path=None, ignore_extension_data=False):
         """Write the current state to our file path or to the given one
 
         :param file_path:
@@ -188,9 +191,10 @@ class IndexFile(LazyMixin, diff.Diffable, Serializable):
             Please note that this will change the file_path of this index to
             the one you gave.
 
-        :param ignore_tree_extension_data:
+        :param ignore_extension_data:
             If True, the TREE type extension data read in the index will not
-            be written to disk. Use this if you have altered the index and
+            be written to disk. NOTE that no extension data is actually written.
+            Use this if you have altered the index and
             would like to use git-write-tree afterwards to create a tree
             representing your written changes.
             If this data is present in the written index, git-write-tree
@@ -206,7 +210,7 @@ class IndexFile(LazyMixin, diff.Diffable, Serializable):
         lfd = LockedFD(file_path or self._file_path)
         stream = lfd.open(write=True, stream=True)
 
-        self._serialize(stream, ignore_tree_extension_data)
+        self._serialize(stream, ignore_extension_data)
 
         lfd.commit()
 
@@ -346,6 +350,7 @@ class IndexFile(LazyMixin, diff.Diffable, Serializable):
         return index
 
     # UTILITIES
+    @unbare_repo
     def _iter_expand_paths(self, paths):
         """Expand the directories in list of paths to the corresponding paths accordingly,
 
@@ -361,6 +366,17 @@ class IndexFile(LazyMixin, diff.Diffable, Serializable):
             if not os.path.isabs(abs_path):
                 abs_path = os.path.join(r, path)
             # END make absolute path
+
+            try:
+                st = os.lstat(abs_path)     # handles non-symlinks as well
+            except OSError:
+                # the lstat call may fail as the path may contain globs as well
+                pass
+            else:
+                if S_ISLNK(st.st_mode):
+                    yield abs_path.replace(rs, '')
+                    continue
+            # end check symlink
 
             # resolve globs if possible
             if '?' in path or '*' in path or '[' in path:
@@ -536,6 +552,8 @@ class IndexFile(LazyMixin, diff.Diffable, Serializable):
         if it is not within our git direcotory"""
         if not os.path.isabs(path):
             return path
+        if self.repo.bare:
+            raise InvalidGitRepositoryError("require non-bare repository")
         relative_path = path.replace(self.repo.working_tree_dir + os.sep, "")
         if relative_path == path:
             raise ValueError("Absolute path %r is not in git repository at %r" % (path, self.repo.working_tree_dir))
@@ -565,16 +583,18 @@ class IndexFile(LazyMixin, diff.Diffable, Serializable):
         stream = None
         if S_ISLNK(st.st_mode):
             # in PY3, readlink is string, but we need bytes. In PY2, it's just OS encoded bytes, we assume UTF-8
-            stream = BytesIO(force_bytes(os.readlink(filepath), encoding='utf-8'))
+            stream = BytesIO(force_bytes(os.readlink(filepath), encoding=defenc))
         else:
             stream = open(filepath, 'rb')
         # END handle stream
         fprogress(filepath, False, filepath)
         istream = self.repo.odb.store(IStream(Blob.type, st.st_size, stream))
         fprogress(filepath, True, filepath)
+        stream.close()
         return BaseIndexEntry((stat_mode_to_index_mode(st.st_mode),
                                istream.binsha, 0, to_native_path_linux(filepath)))
 
+    @unbare_repo
     @git_working_dir
     def _entries_for_paths(self, paths, path_rewriter, fprogress, entries):
         entries_added = list()
@@ -606,7 +626,7 @@ class IndexFile(LazyMixin, diff.Diffable, Serializable):
         return entries_added
 
     def add(self, items, force=True, fprogress=lambda *args: None, path_rewriter=None,
-            write=True):
+            write=True, write_extension_data=False):
         """Add files from the working tree, specific blobs or BaseIndexEntries
         to the index.
 
@@ -618,6 +638,10 @@ class IndexFile(LazyMixin, diff.Diffable, Serializable):
             - path string
                 strings denote a relative or absolute path into the repository pointing to
                 an existing file, i.e. CHANGES, lib/myfile.ext, '/home/gitrepo/lib/myfile.ext'.
+
+                Absolute paths must start with working tree directory of this index's repository
+                to be considered valid. For example, if it was initialized with a non-normalized path, like
+                `/root/repo/../repo`, absolute paths to be added must start with `/root/repo/../repo`.
 
                 Paths provided like this must exist. When added, they will be written
                 into the object database.
@@ -679,8 +703,19 @@ class IndexFile(LazyMixin, diff.Diffable, Serializable):
             Please note that entry.path is relative to the git repository.
 
         :param write:
-                If True, the index will be written once it was altered. Otherwise
-                the changes only exist in memory and are not available to git commands.
+            If True, the index will be written once it was altered. Otherwise
+            the changes only exist in memory and are not available to git commands.
+
+        :param write_extension_data:
+            If True, extension data will be written back to the index. This can lead to issues in case
+            it is containing the 'TREE' extension, which will cause the `git commit` command to write an
+            old tree, instead of a new one representing the now changed index.
+            This doesn't matter if you use `IndexFile.commit()`, which ignores the `TREE` extension altogether.
+            You should set it to True if you intend to use `IndexFile.commit()` exclusively while maintaining
+            support for third-party extensions. Besides that, you can usually safely ignore the built-in
+            extensions when using GitPython on repositories that are not handled manually at all.
+            All current built-in extensions are listed here:
+            http://opensource.apple.com/source/Git/Git-26/src/git-htmldocs/technical/index-format.txt
 
         :return:
             List(BaseIndexEntries) representing the entries just actually added.
@@ -753,7 +788,7 @@ class IndexFile(LazyMixin, diff.Diffable, Serializable):
             self.entries[(entry.path, 0)] = IndexEntry.from_base(entry)
 
         if write:
-            self.write()
+            self.write(ignore_extension_data=not write_extension_data)
         # END handle write
 
         return entries_added
@@ -887,7 +922,8 @@ class IndexFile(LazyMixin, diff.Diffable, Serializable):
 
         return out
 
-    def commit(self, message, parent_commits=None, head=True, author=None, committer=None):
+    def commit(self, message, parent_commits=None, head=True, author=None,
+               committer=None, author_date=None, commit_date=None):
         """Commit the current default index file, creating a commit object.
         For more information on the arguments, see tree.commit.
 
@@ -897,7 +933,8 @@ class IndexFile(LazyMixin, diff.Diffable, Serializable):
         run_commit_hook('pre-commit', self)
         tree = self.write_tree()
         rval = Commit.create_from_tree(self.repo, tree, message, parent_commits,
-                                       head, author=author, committer=committer)
+                                       head, author=author, committer=committer,
+                                       author_date=author_date, commit_date=commit_date)
         run_commit_hook('post-commit', self)
         return rval
 

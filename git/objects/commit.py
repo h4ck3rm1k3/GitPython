@@ -34,6 +34,7 @@ from io import BytesIO
 import logging
 
 log = logging.getLogger('git.objects.commit')
+log.addHandler(logging.NullHandler())
 
 __all__ = ('Commit', )
 
@@ -69,6 +70,7 @@ class Commit(base.Object, Iterable, Diffable, Traversable, Serializable):
                  message=None, parents=None, encoding=None, gpgsig=None):
         """Instantiate a new Commit. All keyword arguments taking None as default will
         be implicitly set on first query.
+
         :param binsha: 20 byte sha1
         :param parents: tuple( Commit, ... )
             is a tuple of commit ids or actual Commits
@@ -97,7 +99,8 @@ class Commit(base.Object, Iterable, Diffable, Traversable, Serializable):
             dependency graph
         :return: git.Commit
 
-        :note: Timezone information is in the same format and in the same sign
+        :note:
+            Timezone information is in the same format and in the same sign
             as what time.altzone returns. The sign is inverted compared to git's
             UTC timezone."""
         super(Commit, self).__init__(repo, binsha)
@@ -187,9 +190,12 @@ class Commit(base.Object, Iterable, Diffable, Traversable, Serializable):
         if 'pretty' in kwargs:
             raise ValueError("--pretty cannot be used as parsing expects single sha's only")
         # END handle pretty
-        args = list()
+
+        # use -- in any case, to prevent possibility of ambiguous arguments
+        # see https://github.com/gitpython-developers/GitPython/issues/264
+        args = ['--']
         if paths:
-            args.extend(('--', paths))
+            args.extend((paths, ))
         # END if paths
 
         proc = repo.git.rev_list(rev, args, as_process=True, **kwargs)
@@ -260,7 +266,8 @@ class Commit(base.Object, Iterable, Diffable, Traversable, Serializable):
             finalize_process(proc_or_stream)
 
     @classmethod
-    def create_from_tree(cls, repo, tree, message, parent_commits=None, head=False, author=None, committer=None):
+    def create_from_tree(cls, repo, tree, message, parent_commits=None, head=False, author=None, committer=None,
+                         author_date=None, commit_date=None):
         """Commit the given tree, creating a commit object.
 
         :param repo: Repo object the commit should be part of
@@ -282,6 +289,8 @@ class Commit(base.Object, Iterable, Diffable, Traversable, Serializable):
             configuration is used to obtain this value.
         :param committer: The name of the committer, optional. If unset, the
             repository configuration is used to obtain this value.
+        :param author_date: The timestamp for the author field
+        :param commit_date: The timestamp for the committer field
 
         :return: Commit object representing the new commit
 
@@ -296,6 +305,11 @@ class Commit(base.Object, Iterable, Diffable, Traversable, Serializable):
                 # empty repositories have no head commit
                 parent_commits = list()
             # END handle parent commits
+        else:
+            for p in parent_commits:
+                if not isinstance(p, cls):
+                    raise ValueError("Parent commit '%r' must be of type %s" % (p, cls))
+            # end check parent commit types
         # END if parent commits are unset
 
         # retrieve all additional information, create a commit object, and
@@ -316,14 +330,18 @@ class Commit(base.Object, Iterable, Diffable, Traversable, Serializable):
         offset = altzone
 
         author_date_str = env.get(cls.env_author_date, '')
-        if author_date_str:
+        if author_date:
+            author_time, author_offset = parse_date(author_date)
+        elif author_date_str:
             author_time, author_offset = parse_date(author_date_str)
         else:
             author_time, author_offset = unix_time, offset
         # END set author time
 
         committer_date_str = env.get(cls.env_committer_date, '')
-        if committer_date_str:
+        if commit_date:
+            committer_time, committer_offset = parse_date(commit_date)
+        elif committer_date_str:
             committer_time, committer_offset = parse_date(committer_date_str)
         else:
             committer_time, committer_offset = unix_time, offset
@@ -435,7 +453,7 @@ class Commit(base.Object, Iterable, Diffable, Traversable, Serializable):
         next_line = readline()
         while next_line.startswith(b'mergetag '):
             next_line = readline()
-            while next_line.startswith(' '):
+            while next_line.startswith(b' '):
                 next_line = readline()
         # end skip mergetags
 

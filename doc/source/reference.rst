@@ -8,7 +8,8 @@ Objects.Base
 
 .. automodule:: git.objects.base
    :members:
-   :undoc-members:  
+   :undoc-members:
+   :special-members:
  
 Objects.Blob
 ------------
@@ -16,6 +17,7 @@ Objects.Blob
 .. automodule:: git.objects.blob
    :members:
    :undoc-members:
+   :special-members:
    
 Objects.Commit
 --------------
@@ -23,6 +25,7 @@ Objects.Commit
 .. automodule:: git.objects.commit
    :members:
    :undoc-members:
+   :special-members:
    
 Objects.Tag
 -----------
@@ -30,6 +33,7 @@ Objects.Tag
 .. automodule:: git.objects.tag
    :members:
    :undoc-members:
+   :special-members:
 
 Objects.Tree
 ------------
@@ -37,6 +41,7 @@ Objects.Tree
 .. automodule:: git.objects.tree
    :members:
    :undoc-members:
+   :special-members:
 
 Objects.Functions
 -----------------
@@ -44,6 +49,7 @@ Objects.Functions
 .. automodule:: git.objects.fun
    :members:
    :undoc-members:
+   :special-members:
 
 Objects.Submodule.base
 ----------------------
@@ -51,6 +57,7 @@ Objects.Submodule.base
 .. automodule:: git.objects.submodule.base
    :members:
    :undoc-members:
+   :special-members:
 
 Objects.Submodule.root
 ----------------------
@@ -58,6 +65,7 @@ Objects.Submodule.root
 .. automodule:: git.objects.submodule.root
    :members:
    :undoc-members:
+   :special-members:
    
 Objects.Submodule.util
 ----------------------
@@ -65,6 +73,7 @@ Objects.Submodule.util
 .. automodule:: git.objects.submodule.util
    :members:
    :undoc-members:
+   :special-members:
    
 Objects.Util
 -------------
@@ -72,6 +81,7 @@ Objects.Util
 .. automodule:: git.objects.util
    :members:
    :undoc-members:
+   :special-members:
 
 Index.Base
 ----------
@@ -79,6 +89,7 @@ Index.Base
 .. automodule:: git.index.base
    :members:
    :undoc-members:
+   :special-members:
 
 Index.Functions
 ---------------
@@ -86,6 +97,7 @@ Index.Functions
 .. automodule:: git.index.fun
    :members:
    :undoc-members:
+   :special-members:
    
 Index.Types
 -----------
@@ -93,6 +105,7 @@ Index.Types
 .. automodule:: git.index.typ
    :members:
    :undoc-members:
+   :special-members:
    
 Index.Util
 -------------
@@ -100,6 +113,7 @@ Index.Util
 .. automodule:: git.index.util
    :members:
    :undoc-members:
+   :special-members:
    
 GitCmd
 ------
@@ -107,7 +121,7 @@ GitCmd
 .. automodule:: git.cmd
    :members:
    :undoc-members:
-
+   :special-members:
 
 Config
 ------
@@ -115,6 +129,7 @@ Config
 .. automodule:: git.config
    :members:
    :undoc-members:
+   :special-members:
    
 Diff
 ----
@@ -122,6 +137,7 @@ Diff
 .. automodule:: git.diff
    :members:
    :undoc-members:
+   :special-members:
 
 Exceptions
 ----------
@@ -129,6 +145,7 @@ Exceptions
 .. automodule:: git.exc
    :members:
    :undoc-members:
+   :special-members:
 
  
 Refs.symbolic
@@ -137,6 +154,7 @@ Refs.symbolic
 .. automodule:: git.refs.symbolic
    :members:
    :undoc-members:
+   :special-members:
    
 Refs.reference
 --------------
@@ -144,6 +162,7 @@ Refs.reference
 .. automodule:: git.refs.reference
    :members:
    :undoc-members:
+   :special-members:
 
 Refs.head
 ---------
@@ -151,6 +170,7 @@ Refs.head
 .. automodule:: git.refs.head
    :members:
    :undoc-members:
+   :special-members:
    
 Refs.tag
 ------------
@@ -158,6 +178,7 @@ Refs.tag
 .. automodule:: git.refs.tag
    :members:
    :undoc-members:
+   :special-members:
    
 Refs.remote
 ------------
@@ -165,6 +186,7 @@ Refs.remote
 .. automodule:: git.refs.remote
    :members:
    :undoc-members:
+   :special-members:
    
 Refs.log
 ------------
@@ -172,6 +194,7 @@ Refs.log
 .. automodule:: git.refs.log
    :members:
    :undoc-members:
+   :special-members:
    
 Remote
 ------
@@ -179,6 +202,7 @@ Remote
 .. automodule:: git.remote
    :members:
    :undoc-members:
+   :special-members:
 
 Repo.Base
 ---------
@@ -186,6 +210,7 @@ Repo.Base
 .. automodule:: git.repo.base
    :members:
    :undoc-members:
+   :special-members:
    
 Repo.Functions
 --------------
@@ -193,6 +218,7 @@ Repo.Functions
 .. automodule:: git.repo.fun
    :members:
    :undoc-members:
+   :special-members:
 
 Util
 ----
@@ -200,3 +226,4 @@ Util
 .. automodule:: git.util
    :members:
    :undoc-members:
+   :special-members:

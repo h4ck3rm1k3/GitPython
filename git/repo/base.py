@@ -35,10 +35,7 @@ from git.remote import (
     add_progress
 )
 
-from git.db import (
-    GitCmdObjectDB,
-    GitDB
-)
+from git.db import GitCmdObjectDB
 
 from gitdb.util import (
     join,
@@ -54,14 +51,15 @@ from .fun import (
 )
 from git.compat import (
     text_type,
-    defenc
+    defenc,
+    PY3
 )
 
 import os
 import sys
 import re
 
-DefaultDBType = GitDB
+DefaultDBType = GitCmdObjectDB
 if sys.version_info[:2] < (2, 5):     # python 2.4 compatiblity
     DefaultDBType = GitCmdObjectDB
 # END handle python 2.4
@@ -75,7 +73,6 @@ def _expand_path(p):
 
 
 class Repo(object):
-
     """Represents a git repository and allows you to query references,
     gather commit information, generate diffs, create and clone repositories query
     the log.
@@ -103,19 +100,30 @@ class Repo(object):
     # represents the configuration level of a configuration file
     config_level = ("system", "user", "global", "repository")
 
+    # Subclass configuration
+    # Subclasses may easily bring in their own custom types by placing a constructor or type here
+    GitCommandWrapperType = Git
+
     def __init__(self, path=None, odbt=DefaultDBType, search_parent_directories=False):
         """Create a new Repo instance
 
-        :param path: is the path to either the root git directory or the bare git repo::
+        :param path:
+            the path to either the root git directory or the bare git repo::
 
-            repo = Repo("/Users/mtrier/Development/git-python")
-            repo = Repo("/Users/mtrier/Development/git-python.git")
-            repo = Repo("~/Development/git-python.git")
-            repo = Repo("$REPOSITORIES/Development/git-python.git")
+                repo = Repo("/Users/mtrier/Development/git-python")
+                repo = Repo("/Users/mtrier/Development/git-python.git")
+                repo = Repo("~/Development/git-python.git")
+                repo = Repo("$REPOSITORIES/Development/git-python.git")
 
-        :param odbt: Object DataBase type - a type which is constructed by providing
+        :param odbt:
+            Object DataBase type - a type which is constructed by providing
             the directory containing the database objects, i.e. .git/objects. It will
             be used to access all object data
+        :param search_parent_directories:
+            if True, all parent directories will be searched for a valid repo as well.
+
+            Please note that this was the default behaviour in older versions of GitPython,
+            which is considered a bug though.
         :raise InvalidGitRepositoryError:
         :raise NoSuchPathError:
         :return: git.Repo """
@@ -170,7 +178,7 @@ class Repo(object):
         # END working dir handling
 
         self.working_dir = self._working_tree_dir or self.git_dir
-        self.git = Git(self.working_dir)
+        self.git = self.GitCommandWrapperType(self.working_dir)
 
         # special handling, in special times
         args = [join(self.git_dir, 'objects')]
@@ -209,10 +217,8 @@ class Repo(object):
 
     @property
     def working_tree_dir(self):
-        """:return: The working tree directory of our git repository
-        :raise AssertionError: If we are a bare repository"""
-        if self._working_tree_dir is None:
-            raise AssertionError("Repository at %r is bare and does not have a working tree directory" % self.git_dir)
+        """:return: The working tree directory of our git repository. If this is a bare repository, None is returned.
+        """
         return self._working_tree_dir
 
     @property
@@ -456,7 +462,7 @@ class Repo(object):
             max_count and skip
 
         :note: to receive only commits between two named revisions, use the
-            "revA..revB" revision specifier
+            "revA...revB" revision specifier
 
         :return ``git.Commit[]``"""
         if rev is None:
@@ -494,6 +500,21 @@ class Repo(object):
         # end for each merge-base
 
         return res
+
+    def is_ancestor(self, ancestor_rev, rev):
+        """Check if a commit  is an ancestor of another
+
+        :param ancestor_rev: Rev which should be an ancestor
+        :param rev: Rev to test against ancestor_rev
+        :return: ``True``, ancestor_rev is an accestor to rev.
+        """
+        try:
+            self.git.merge_base(ancestor_rev, rev, is_ancestor=True)
+        except GitCommandError as err:
+            if err.status == 1:
+                return False
+            raise
+        return True
 
     def _get_daemon_export(self):
         filename = join(self.git_dir, self.DAEMON_EXPORT_FILE)
@@ -555,7 +576,8 @@ class Repo(object):
     alternates = property(_get_alternates, _set_alternates,
                           doc="Retrieve a list of alternates paths or set a list paths to be used as alternates")
 
-    def is_dirty(self, index=True, working_tree=True, untracked_files=False):
+    def is_dirty(self, index=True, working_tree=True, untracked_files=False,
+                 submodules=True):
         """
         :return:
             ``True``, the repository is considered dirty. By default it will react
@@ -567,7 +589,9 @@ class Repo(object):
             return False
 
         # start from the one which is fastest to evaluate
-        default_args = ('--abbrev=40', '--full-index', '--raw')
+        default_args = ['--abbrev=40', '--full-index', '--raw']
+        if not submodules:
+            default_args.append('--ignore-submodules')
         if index:
             # diff index against HEAD
             if isfile(self.index.path) and \
@@ -580,7 +604,7 @@ class Repo(object):
                 return True
         # END working tree handling
         if untracked_files:
-            if len(self.untracked_files):
+            if len(self._get_untracked_files(ignore_submodules=not submodules)):
                 return True
         # END untracked files
         return False
@@ -596,10 +620,14 @@ class Repo(object):
 
         :note:
             ignored files will not appear here, i.e. files mentioned in .gitignore"""
+        return self._get_untracked_files()
+
+    def _get_untracked_files(self, **kwargs):
         # make sure we get all files, no only untracked directores
         proc = self.git.status(porcelain=True,
                                untracked_files=True,
-                               as_process=True)
+                               as_process=True,
+                               **kwargs)
         # Untracked files preffix in porcelain mode
         prefix = "?? "
         untracked_files = list()
@@ -610,7 +638,12 @@ class Repo(object):
             filename = line[len(prefix):].rstrip('\n')
             # Special characters are escaped
             if filename[0] == filename[-1] == '"':
-                filename = filename[1:-1].decode('string_escape')
+                filename = filename[1:-1]
+                if PY3:
+                    # WHATEVER ... it's a mess, but works for me
+                    filename = filename.encode('ascii').decode('unicode_escape').encode('latin1').decode(defenc)
+                else:
+                    filename = filename.decode('string_escape').decode(defenc)
             untracked_files.append(filename)
         finalize_process(proc)
         return untracked_files
@@ -729,7 +762,7 @@ class Repo(object):
         return blames
 
     @classmethod
-    def init(cls, path=None, mkdir=True, **kwargs):
+    def init(cls, path=None, mkdir=True, odbt=DefaultDBType, **kwargs):
         """Initialize a git repository at the given path if specified
 
         :param path:
@@ -741,6 +774,11 @@ class Repo(object):
             if specified will create the repository directory if it doesn't
             already exists. Creates the directory with a mode=0755.
             Only effective if a path is explicitly given
+
+        :param odbt:
+            Object DataBase type - a type which is constructed by providing
+            the directory containing the database objects, i.e. .git/objects.
+            It will be used to access all object data
 
         :parm kwargs:
             keyword arguments serving as additional options to the git-init command
@@ -754,7 +792,7 @@ class Repo(object):
         # git command automatically chdir into the directory
         git = Git(path)
         git.init(**kwargs)
-        return Repo(path)
+        return cls(path, odbt=odbt)
 
     @classmethod
     def _clone(cls, git, url, path, odb_default_type, progress, **kwargs):
@@ -831,14 +869,19 @@ class Repo(object):
         return self._clone(self.git, self.git_dir, path, type(self.odb), progress, **kwargs)
 
     @classmethod
-    def clone_from(cls, url, to_path, progress=None, **kwargs):
+    def clone_from(cls, url, to_path, progress=None, env=None, **kwargs):
         """Create a clone from the given URL
+
         :param url: valid git url, see http://www.kernel.org/pub/software/scm/git/docs/git-clone.html#URLS
         :param to_path: Path to which the repository should be cloned to
         :param progress: See 'git.remote.Remote.push'.
+        :param env: Optional dictionary containing the desired environment variables.
         :param kwargs: see the ``clone`` method
         :return: Repo instance pointing to the cloned directory"""
-        return cls._clone(Git(os.getcwd()), url, to_path, GitCmdObjectDB, progress, **kwargs)
+        git = Git(os.getcwd())
+        if env is not None:
+            git.update_environment(**env)
+        return cls._clone(git, url, to_path, GitCmdObjectDB, progress, **kwargs)
 
     def archive(self, ostream, treeish=None, prefix=None, **kwargs):
         """Archive the tree at the given revision.
@@ -867,6 +910,16 @@ class Repo(object):
 
         self.git.archive(treeish, *path, **kwargs)
         return self
+
+    def has_separate_working_tree(self):
+        """
+        :return: True if our git_dir is not at the root of our working_tree_dir, but a .git file with a
+            platform agnositic symbolic link. Our git_dir will be whereever the .git file points to
+        :note: bare repositories will always return False here
+        """
+        if self.bare:
+            return False
+        return os.path.isfile(os.path.join(self.working_tree_dir, '.git'))
 
     rev_parse = rev_parse
 

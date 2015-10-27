@@ -43,7 +43,7 @@ master_doc = 'index'
 
 # General information about the project.
 project = u'GitPython'
-copyright = u'Copyright (C) 2008, 2009 Michael Trier and contributors, 2010 Sebastian Thiel'
+copyright = u'Copyright (C) 2008, 2009 Michael Trier and contributors, 2010-2015 Sebastian Thiel'
 
 # The version info for the project you're documenting, acts as replacement for
 # |version| and |release|, also used in various other places throughout the
@@ -94,7 +94,6 @@ pygments_style = 'sphinx'
 # -----------------------
 
 html_theme_options = {
-    "stickysidebar": "true"
 }
 
 # The style sheet to use for HTML and HTML Help pages. A file of that name

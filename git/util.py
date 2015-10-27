@@ -13,11 +13,17 @@ import shutil
 import platform
 import getpass
 import threading
+import logging
 
 # NOTE:  Some of the unused imports might be used/imported by others.
 # Handle once test-cases are back up and running.
-from .exc import GitCommandError
-from .compat import MAXSIZE
+from .exc import InvalidGitRepositoryError
+
+from .compat import (
+    MAXSIZE,
+    defenc,
+    PY3
+)
 
 # Most of these are unused here, but are for use by git-python modules so these
 # don't see gitdb all the time. Flake of course doesn't like it.
@@ -33,9 +39,23 @@ from gitdb.util import (  # NOQA
 __all__ = ("stream_copy", "join_path", "to_native_path_windows", "to_native_path_linux",
            "join_path_native", "Stats", "IndexFileSHA1Writer", "Iterable", "IterableList",
            "BlockingLockFile", "LockFile", 'Actor', 'get_user_id', 'assure_directory_exists',
-           'RemoteProgress', 'rmtree', 'WaitGroup')
+           'RemoteProgress', 'rmtree', 'WaitGroup', 'unbare_repo')
 
 #{ Utility Methods
+
+
+def unbare_repo(func):
+    """Methods with this decorator raise InvalidGitRepositoryError if they
+    encounter a bare repository"""
+
+    def wrapper(self, *args, **kwargs):
+        if self.repo.bare:
+            raise InvalidGitRepositoryError("Method '%s' cannot operate on bare repositories" % func.__name__)
+        # END bare method
+        return func(self, *args, **kwargs)
+    # END wrapper
+    wrapper.__name__ = func.__name__
+    return wrapper
 
 
 def rmtree(path):
@@ -132,15 +152,7 @@ def get_user_id():
 
 def finalize_process(proc):
     """Wait for the process (clone, fetch, pull or push) and handle its errors accordingly"""
-    try:
-        proc.wait()
-    except GitCommandError:
-        # if a push has rejected items, the command has non-zero return status
-        # a return status of 128 indicates a connection error - reraise the previous one
-        if proc.poll() == 128:
-            raise
-        pass
-    # END exception handling
+    proc.wait()
 
 #} END utilities
 
@@ -153,8 +165,9 @@ class RemoteProgress(object):
     Handler providing an interface to parse progress information emitted by git-push
     and git-fetch and to dispatch callbacks allowing subclasses to react to the progress.
     """
-    _num_op_codes = 7
-    BEGIN, END, COUNTING, COMPRESSING, WRITING, RECEIVING, RESOLVING = [1 << x for x in range(_num_op_codes)]
+    _num_op_codes = 8
+    BEGIN, END, COUNTING, COMPRESSING, WRITING, RECEIVING, RESOLVING, FINDING_SOURCES = \
+        [1 << x for x in range(_num_op_codes)]
     STAGE_MASK = BEGIN | END
     OP_MASK = ~STAGE_MASK
 
@@ -216,6 +229,8 @@ class RemoteProgress(object):
                 op_code |= self.RECEIVING
             elif op_name == 'Resolving deltas':
                 op_code |= self.RESOLVING
+            elif op_name == 'Finding sources':
+                op_code |= self.FINDING_SOURCES
             else:
                 # Note: On windows it can happen that partial lines are sent
                 # Hence we get something like "CompreReceiving objects", which is
@@ -224,7 +239,6 @@ class RemoteProgress(object):
                 # to make sure we get informed in case the process spits out new
                 # commands at some point.
                 self.line_dropped(sline)
-                sys.stderr.write("Operation name %r unknown - skipping line '%s'" % (op_name, sline))
                 # Note: Don't add this line to the failed lines, as we have to silently
                 # drop it
                 return failed_lines
@@ -247,7 +261,10 @@ class RemoteProgress(object):
                 message = message[:-len(done_token)]
             # END end message handling
 
-            self.update(op_code, cur_count, max_count, message)
+            self.update(op_code,
+                        cur_count and float(cur_count),
+                        max_count and float(max_count),
+                        message)
         # END for each sub line
         return failed_lines
 
@@ -364,7 +381,11 @@ class Actor(object):
         for attr, evar, cvar, default in (('name', env_name, cls.conf_name, default_name),
                                           ('email', env_email, cls.conf_email, default_email)):
             try:
-                setattr(actor, attr, os.environ[evar])
+                val = os.environ[evar]
+                if not PY3:
+                    val = val.decode(defenc)
+                # end assure we don't get 'invalid strings'
+                setattr(actor, attr, val)
             except KeyError:
                 if config_reader is not None:
                     setattr(actor, attr, config_reader.get_value('user', cvar, default))
@@ -732,3 +753,12 @@ class WaitGroup(object):
         while self.count > 0:
             self.cv.wait()
         self.cv.release()
+
+
+class NullHandler(logging.Handler):
+    def emit(self, record):
+        pass
+
+# In Python 2.6, there is no NullHandler yet. Let's monkey-patch it for a workaround.
+if not hasattr(logging, 'NullHandler'):
+    logging.NullHandler = NullHandler

@@ -4,7 +4,7 @@ from string import digits
 
 from gitdb.exc import (
     BadObject,
-    BadName
+    BadName,
 )
 from git.refs import SymbolicReference
 from git.objects import Object
@@ -16,6 +16,7 @@ from gitdb.util import (
     hex_to_bin,
     bin_to_hex
 )
+from git.exc import WorkTreeRepositoryUnsupported
 from git.compat import xrange
 
 
@@ -26,18 +27,25 @@ __all__ = ('rev_parse', 'is_git_dir', 'touch', 'find_git_dir', 'name_to_object',
 def touch(filename):
     fp = open(filename, "ab")
     fp.close()
+    return filename
 
 
 def is_git_dir(d):
     """ This is taken from the git setup.c:is_git_directory
-    function."""
-    if isdir(d) and \
-            isdir(join(d, 'objects')) and \
-            isdir(join(d, 'refs')):
-        headref = join(d, 'HEAD')
-        return isfile(headref) or \
-            (os.path.islink(headref) and
-             os.readlink(headref).startswith('refs'))
+    function.
+
+    @throws WorkTreeRepositoryUnsupported if it sees a worktree directory. It's quite hacky to do that here,
+            but at least clearly indicates that we don't support it.
+            There is the unlikely danger to throw if we see directories which just look like a worktree dir,
+            but are none."""
+    if isdir(d):
+        if isdir(join(d, 'objects')) and isdir(join(d, 'refs')):
+            headref = join(d, 'HEAD')
+            return isfile(headref) or \
+                (os.path.islink(headref) and
+                 os.readlink(headref).startswith('refs'))
+        elif isfile(join(d, 'gitdir')) and isfile(join(d, 'commondir')) and isfile(join(d, 'gitfile')):
+            raise WorkTreeRepositoryUnsupported(d)
     return False
 
 
@@ -120,7 +128,7 @@ def name_to_object(repo, name, return_ref=False):
 
 
 def deref_tag(tag):
-    """Recursively dereerence a tag and return the resulting object"""
+    """Recursively dereference a tag and return the resulting object"""
     while True:
         try:
             tag = tag.object
@@ -147,8 +155,6 @@ def rev_parse(repo, rev):
     :param rev: git-rev-parse compatible revision specification as string, please see
         http://www.kernel.org/pub/software/scm/git/docs/git-rev-parse.html
         for details
-    :note: Currently there is no access to the rev-log, rev-specs may only contain
-        topological tokens such ~ and ^.
     :raise BadObject: if the given revision could not be found
     :raise ValueError: If rev couldn't be parsed
     :raise IndexError: If invalid reflog index is specified"""
@@ -296,7 +302,7 @@ def rev_parse(repo, rev):
                 raise ValueError("Invalid token: %r" % token)
             # END end handle tag
         except (IndexError, AttributeError):
-            raise BadObject("Invalid Revision in %s" % rev)
+            raise BadName("Invalid revision spec '%s' - not enough parent commits to reach '%s%i'" % (rev, token, num))
         # END exception handling
     # END parse loop
 

@@ -2,11 +2,64 @@
 Changelog
 =========
 
+1.0.2 - Fixes
+=============
+
+* IMPORTANT: Changed default object database of `Repo` objects to `GitComdObjectDB`. The pure-python implementation
+  used previously usually fails to release its resources (i.e. file handles), which can lead to problems when working
+  with large repositories.
+* CRITICAL: fixed incorrect `Commit` object serialization when authored or commit date had timezones which were not
+  divisable by 3600 seconds. This would happen if the timezone was something like `+0530` for instance.
+* A list of all additional fixes can be found `on github <https://github.com/gitpython-developers/GitPython/issues?q=milestone%3A%22v1.0.2+-+Fixes%22+is%3Aclosed>`_
+
+1.0.1 - Fixes
+=============
+
+* A list of all issues can be found `on github <https://github.com/gitpython-developers/GitPython/issues?q=milestone%3A%22v1.0.1+-+Fixes%22+is%3Aclosed>`_  
+
+1.0.0 - Notes
+=============
+
+This version is equivalent to v0.3.7, but finally acknowledges that GitPython is stable and production ready.
+
+It follows the `semantic version scheme <http://semver.org>`_, and thus will not break its existing API unless it goes 2.0.
+
+0.3.7 - Fixes
+=============
+* `IndexFile.add()` will now write the index without any extension data by default. However, you may override this behaviour with the new `write_extension_data` keyword argument.
+
+  - Renamed `ignore_tree_extension_data` keyword argument in `IndexFile.write(...)` to `ignore_extension_data`
+* If the git command executed during `Remote.push(...)|fetch(...)` returns with an non-zero exit code and GitPython didn't 
+  obtain any head-information, the corresponding `GitCommandError` will be raised. This may break previous code which expected
+  these operations to never raise. However, that behavious is undesirable as it would effectively hide the fact that there 
+  was an error. See `this issue <https://github.com/gitpython-developers/GitPython/issues/271>`_ for more information.
+
+* If the git executable can't be found in the PATH or at the path provided by `GIT_PYTHON_GIT_EXECUTABLE`, this is made
+  obvious by throwing `GitCommandNotFound`, both on unix and on windows.
+
+  - Those who support **GUI on windows** will now have to set `git.Git.USE_SHELL = True` to get the previous behaviour.
+    
+* A list of all issues can be found `on github <https://github.com/gitpython-developers/GitPython/issues?q=milestone%3A%22v0.3.7+-+Fixes%22+is%3Aclosed>`_  
+  
+
 0.3.6 - Features
 ================
+* **DOCS**
+
+  * special members like `__init__` are now listed in the API documentation
+  * tutorial section was revised entirely, more advanced examples were added.
+
+* **POSSIBLY BREAKING CHANGES**
+
+  * As `rev_parse` will now throw `BadName` as well as `BadObject`, client code will have to catch both exception types.
+  * Repo.working_tree_dir now returns None if it is bare. Previously it raised AssertionError.
+  * IndexFile.add() previously raised AssertionError when paths where used with bare repository, now it raises InvalidGitRepositoryError
+  
 * Added `Repo.merge_base()` implementation. See the `respective issue on github <https://github.com/gitpython-developers/GitPython/issues/169>`_
 * `[include]` sections in git configuration files are now respected
-* A list of all issues can be found here: https://github.com/gitpython-developers/GitPython/issues?q=milestone%3A%22v0.3.6+-+Features%22+
+* Added `GitConfigParser.rename_section()`
+* Added `Submodule.rename()`
+* A list of all issues can be found `on github <https://github.com/gitpython-developers/GitPython/issues?q=milestone%3A%22v0.3.6+-+Features%22+>`_
 
 0.3.5 - Bugfixes
 ================
@@ -322,7 +375,7 @@ General
   a treeish git cowardly refuses to pick one and asks for the command to use
   the unambiguous syntax where '--' seperates the treeish from the paths.
 
-* ``Repo.commits``, ``Repo.commits_between``, ``Reop.commits_since``,
+* ``Repo.commits``, ``Repo.commits_between``, ``Repo.commits_since``,
   ``Repo.commit_count``, ``Repo.commit``, ``Commit.count`` and
   ``Commit.find_all`` all now optionally take a path argument which
   constrains the lookup by path.  This changes the order of the positional

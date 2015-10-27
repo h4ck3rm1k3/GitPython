@@ -23,6 +23,7 @@ from git.compat import (
     string_types,
     FileType,
     defenc,
+    force_text,
     with_metaclass,
     PY3
 )
@@ -31,6 +32,7 @@ __all__ = ('GitConfigParser', 'SectionConstraint')
 
 
 log = logging.getLogger('git.config')
+log.addHandler(logging.NullHandler())
 
 
 class MetaParserBuilder(abc.ABCMeta):
@@ -80,6 +82,7 @@ def set_dirty_and_flush_changes(non_const_func):
 
     def flush_changes(self, *args, **kwargs):
         rval = non_const_func(self, *args, **kwargs)
+        self._dirty = True
         self.write()
         return rval
     # END wrapper method
@@ -153,14 +156,20 @@ class GitConfigParser(with_metaclass(MetaParserBuilder, cp.RawConfigParser, obje
 
     #} END configuration
 
+    optvalueonly_source = r'\s*(?P<option>[^:=\s][^:=]*)'
+
+    OPTVALUEONLY = re.compile(optvalueonly_source)
+
     OPTCRE = re.compile(
-        r'\s*(?P<option>[^:=\s][^:=]*)'       # very permissive, incuding leading whitespace
-        r'\s*(?P<vi>[:=])\s*'                 # any number of space/tab,
+        optvalueonly_source                          # very permissive, incuding leading whitespace
+        + r'\s*(?P<vi>[:=])\s*'               # any number of space/tab,
                                               # followed by separator
                                               # (either : or =), followed
                                               # by any # space/tab
-        r'(?P<value>.*)$'                     # everything up to eol
+        + r'(?P<value>.*)$'                     # everything up to eol
     )
+
+    del optvalueonly_source
 
     # list of RawConfigParser methods able to change the instance
     _mutating_methods_ = ("add_section", "remove_section", "remove_option", "set")
@@ -189,6 +198,7 @@ class GitConfigParser(with_metaclass(MetaParserBuilder, cp.RawConfigParser, obje
 
         self._file_or_files = file_or_files
         self._read_only = read_only
+        self._dirty = False
         self._is_initialized = False
         self._merge_includes = merge_includes
         self._lock = None
@@ -303,7 +313,7 @@ class GitConfigParser(with_metaclass(MetaParserBuilder, cp.RawConfigParser, obje
                 if mo:
                     # We might just have handled the last line, which could contain a quotation we want to remove
                     optname, vi, optval = mo.group('option', 'vi', 'value')
-                    if vi in ('=', ':') and ';' in optval:
+                    if vi in ('=', ':') and ';' in optval and not optval.strip().startswith('"'):
                         pos = optval.find(';')
                         if pos != -1 and optval[pos - 1].isspace():
                             optval = optval[:pos]
@@ -318,9 +328,11 @@ class GitConfigParser(with_metaclass(MetaParserBuilder, cp.RawConfigParser, obje
                     # end handle multi-line
                     cursect[optname] = optval
                 else:
-                    if not e:
-                        e = cp.ParsingError(fpname)
-                    e.append(lineno, repr(line))
+                    # check if it's an option with no value - it's just ignored by git
+                    if not self.OPTVALUEONLY.match(line):
+                        if not e:
+                            e = cp.ParsingError(fpname)
+                        e.append(lineno, repr(line))
                     continue
             else:
                 line = line.rstrip()
@@ -382,6 +394,8 @@ class GitConfigParser(with_metaclass(MetaParserBuilder, cp.RawConfigParser, obje
             # We expect all paths to be normalized and absolute (and will assure that is the case)
             if self._has_includes():
                 for _, include_path in self.items('include'):
+                    if include_path.startswith('~'):
+                        include_path = os.path.expanduser(include_path)
                     if not os.path.isabs(include_path):
                         if not close_fp:
                             continue
@@ -412,7 +426,7 @@ class GitConfigParser(with_metaclass(MetaParserBuilder, cp.RawConfigParser, obje
             fp.write(("[%s]\n" % name).encode(defenc))
             for (key, value) in section_dict.items():
                 if key != "__name__":
-                    fp.write(("\t%s = %s\n" % (key, str(value).replace('\n', '\n\t'))).encode(defenc))
+                    fp.write(("\t%s = %s\n" % (key, self._value_to_string(value).replace('\n', '\n\t'))).encode(defenc))
                 # END if key is not __name__
         # END section writing
 
@@ -432,6 +446,8 @@ class GitConfigParser(with_metaclass(MetaParserBuilder, cp.RawConfigParser, obje
         :raise IOError: if this is a read-only writer instance or if we could not obtain
             a file lock"""
         self._assure_writable("write")
+        if not self._dirty:
+            return
 
         if isinstance(self._file_or_files, (list, tuple)):
             raise AssertionError("Cannot write back if there is not exactly a single file to write to, have %i files"
@@ -478,8 +494,6 @@ class GitConfigParser(with_metaclass(MetaParserBuilder, cp.RawConfigParser, obje
         if self.read_only:
             raise IOError("Cannot execute non-constant method %s.%s" % (self, method_name))
 
-    @needs_values
-    @set_dirty_and_flush_changes
     def add_section(self, section):
         """Assures added options will stay in order"""
         return super(GitConfigParser, self).add_section(section)
@@ -531,6 +545,11 @@ class GitConfigParser(with_metaclass(MetaParserBuilder, cp.RawConfigParser, obje
 
         return valuestr
 
+    def _value_to_string(self, value):
+        if isinstance(value, (int, float, bool)):
+            return str(value)
+        return force_text(value)
+
     @needs_values
     @set_dirty_and_flush_changes
     def set_value(self, section, option, value):
@@ -542,7 +561,29 @@ class GitConfigParser(with_metaclass(MetaParserBuilder, cp.RawConfigParser, obje
         :param option: Name of the options whose value to set
 
         :param value: Value to set the option to. It must be a string or convertible
-            to a string"""
+            to a string
+        :return: this instance"""
         if not self.has_section(section):
             self.add_section(section)
-        self.set(section, option, str(value))
+        self.set(section, option, self._value_to_string(value))
+        return self
+
+    def rename_section(self, section, new_name):
+        """rename the given section to new_name
+        :raise ValueError: if section doesn't exit
+        :raise ValueError: if a section with new_name does already exist
+        :return: this instance
+        """
+        if not self.has_section(section):
+            raise ValueError("Source section '%s' doesn't exist" % section)
+        if self.has_section(new_name):
+            raise ValueError("Destination section '%s' already exists" % new_name)
+
+        super(GitConfigParser, self).add_section(new_name)
+        for k, v in self.items(section):
+            self.set(new_name, k, self._value_to_string(v))
+        # end for each value to copy
+
+        # This call writes back the changes, which is why we don't have the respective decorator
+        self.remove_section(section)
+        return self

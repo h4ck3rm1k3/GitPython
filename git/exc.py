@@ -14,8 +14,18 @@ class InvalidGitRepositoryError(Exception):
     """ Thrown if the given repository appears to have an invalid format.  """
 
 
+class WorkTreeRepositoryUnsupported(InvalidGitRepositoryError):
+    """ Thrown to indicate we can't handle work tree repositories """
+
+
 class NoSuchPathError(OSError):
     """ Thrown if a path could not be access by the system. """
+
+
+class GitCommandNotFound(Exception):
+    """Thrown if we cannot find the `git` executable in the PATH or at the path given by
+    the GIT_PYTHON_GIT_EXECUTABLE environment variable"""
+    pass
 
 
 class GitCommandError(Exception):
@@ -84,3 +94,14 @@ class HookExecutionError(Exception):
     def __str__(self):
         return ("'%s' hook returned with exit code %i\nstdout: '%s'\nstderr: '%s'"
                 % (self.command, self.status, self.stdout, self.stderr))
+
+
+class RepositoryDirtyError(Exception):
+    """Thrown whenever an operation on a repository fails as it has uncommited changes that would be overwritten"""
+
+    def __init__(self, repo, message):
+        self.repo = repo
+        self.message = message
+
+    def __str__(self):
+        return "Operation cannot be performed on %r: %s" % (self.repo, self.message)

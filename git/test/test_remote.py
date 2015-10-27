@@ -7,7 +7,9 @@
 from git.test.lib import (
     TestBase,
     with_rw_repo,
-    with_rw_and_rw_remote_repo
+    with_rw_and_rw_remote_repo,
+    fixture,
+    GIT_DAEMON_PORT
 )
 from git import (
     RemoteProgress,
@@ -163,11 +165,11 @@ class TestRemote(TestBase):
         def get_info(res, remote, name):
             return res["%s/%s" % (remote, name)]
 
-        # put remote head to master as it is garantueed to exist
+        # put remote head to master as it is guaranteed to exist
         remote_repo.head.reference = remote_repo.heads.master
 
         res = fetch_and_test(remote)
-        # all uptodate
+        # all up to date
         for info in res:
             assert info.flags & info.HEAD_UPTODATE
 
@@ -249,7 +251,7 @@ class TestRemote(TestBase):
         # must clone with a local path for the repo implementation not to freak out
         # as it wants local paths only ( which I can understand )
         other_repo = remote_repo.clone(other_repo_dir, shared=False)
-        remote_repo_url = "git://localhost%s" % remote_repo.git_dir
+        remote_repo_url = "git://localhost:%s%s" % (GIT_DAEMON_PORT, remote_repo.git_dir)
 
         # put origin to git-url
         other_origin = other_repo.remotes.origin
@@ -312,8 +314,7 @@ class TestRemote(TestBase):
         self._do_test_push_result(res, remote)
 
         # invalid refspec
-        res = remote.push("hellothere")
-        assert len(res) == 0
+        self.failUnlessRaises(GitCommandError, remote.push, "hellothere")
 
         # push new tags
         progress = TestRemoteProgress()
@@ -348,6 +349,7 @@ class TestRemote(TestBase):
         new_head = Head.create(rw_repo, "my_new_branch")
         progress = TestRemoteProgress()
         res = remote.push(new_head, progress)
+        assert len(res) > 0
         assert res[0].flags & PushInfo.NEW_HEAD
         progress.make_assertion()
         self._do_test_push_result(res, remote)
@@ -443,6 +445,24 @@ class TestRemote(TestBase):
         origin = rw_repo.remote('origin')
         assert origin == rw_repo.remotes.origin
 
+        # Verify we can handle prunes when fetching
+        # stderr lines look like this:  x [deleted]         (none)     -> origin/experiment-2012
+        # These should just be skipped
+        # If we don't have a manual checkout, we can't actually assume there are any non-master branches
+        remote_repo.create_head("myone_for_deletion")
+        # Get the branch - to be pruned later
+        origin.fetch()
+
+        num_deleted = False
+        for branch in remote_repo.heads:
+            if branch.name != 'master':
+                branch.delete(remote_repo, branch, force=True)
+                num_deleted += 1
+            # end
+        # end for each branch
+        assert num_deleted > 0
+        assert len(rw_repo.remotes.origin.fetch(prune=True)) == 1, "deleted everything but master"
+
     @with_rw_repo('HEAD', bare=True)
     def test_creation_and_removal(self, bare_rw_repo):
         new_name = "test_new_one"
@@ -450,11 +470,15 @@ class TestRemote(TestBase):
         remote = Remote.create(bare_rw_repo, *arg_list)
         assert remote.name == "test_new_one"
         assert remote in bare_rw_repo.remotes
+        assert remote.exists()
 
         # create same one again
         self.failUnlessRaises(GitCommandError, Remote.create, bare_rw_repo, *arg_list)
 
         Remote.remove(bare_rw_repo, new_name)
+        assert remote.exists()      # We still have a cache that doesn't know we were deleted by name
+        remote._clear_cache()
+        assert not remote.exists()  # Cache should be renewed now. This is an issue ...
 
         for remote in bare_rw_repo.remotes:
             if remote.name == new_name:
@@ -462,11 +486,19 @@ class TestRemote(TestBase):
             # END if deleted remote matches existing remote's name
         # END for each remote
 
+        # Issue #262 - the next call would fail if bug wasn't fixed
+        bare_rw_repo.create_remote('bogus', '/bogus/path', mirror='push')
+
     def test_fetch_info(self):
         # assure we can handle remote-tracking branches
         fetch_info_line_fmt = "c437ee5deb8d00cf02f03720693e4c802e99f390	not-for-merge	%s '0.3' of "
         fetch_info_line_fmt += "git://github.com/gitpython-developers/GitPython"
         remote_info_line_fmt = "* [new branch]      nomatter     -> %s"
+
+        self.failUnlessRaises(ValueError, FetchInfo._from_line, self.rorepo,
+                              remote_info_line_fmt % "refs/something/branch",
+                              "269c498e56feb93e408ed4558c8138d750de8893\t\t/Users/ben/test/foo\n")
+
         fi = FetchInfo._from_line(self.rorepo,
                                   remote_info_line_fmt % "local/master",
                                   fetch_info_line_fmt % 'remote-tracking branch')
@@ -515,3 +547,16 @@ class TestRemote(TestBase):
 
         assert type(fi.ref) is Reference
         assert fi.ref.path == "refs/something/branch"
+
+    def test_uncommon_branch_names(self):
+        stderr_lines = fixture('uncommon_branch_prefix_stderr').decode('ascii').splitlines()
+        fetch_lines = fixture('uncommon_branch_prefix_FETCH_HEAD').decode('ascii').splitlines()
+
+        # The contents of the files above must be fetched with a custom refspec:
+        # +refs/pull/*:refs/heads/pull/*
+        res = [FetchInfo._from_line('ShouldntMatterRepo', stderr, fetch_line)
+               for stderr, fetch_line in zip(stderr_lines, fetch_lines)]
+        assert len(res)
+        assert res[0].remote_ref_path == 'refs/pull/1/head'
+        assert res[0].ref.path == 'refs/heads/pull/1/head'
+        assert isinstance(res[0].ref, Head)

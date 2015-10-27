@@ -15,20 +15,31 @@ install:
   - pip install coveralls flake8 sphinx
 
   # generate some reflog as git-python tests need it (in master)
+  - git tag __testing_point__
   - git checkout master
   - git reset --hard HEAD~1
   - git reset --hard HEAD~1
   - git reset --hard HEAD~1
-  - git reset --hard origin/master
+  - git reset --hard __testing_point__
 
   # as commits are performed with the default user, it needs to be set for travis too
   - git config --global user.email "travis@ci.com"
   - git config --global user.name "Travis Runner"
+  # If we rewrite the user's config by accident, we will mess it up
+  # and cause subsequent tests to fail
+  - cat git/test/fixtures/.gitconfig >> ~/.gitconfig
+  # used later when testing for specific issue
+  # copy the configured key into place so clone can work
+  # The key just has read-only access to the test-repository
+  - cp .travis.private-ssh-key-for-issue-301 ~/.ssh/id_rsa
+  - chmod 0400 ~/.ssh/id_rsa
+  - git clone git@github.com:gitpython-developers/gitpython_issue_301.git issue-301-repo
 script: 
   # Make sure we limit open handles to see if we are leaking them
-  - ulimit -n 64
+  - ulimit -n 96
   - ulimit -n
   - nosetests -v --with-coverage
+  - '( cd issue-301-repo && PYTHONPATH=$PWD/.. ./reproduce.py )'
   - flake8
   - cd doc && make html
 after_success:

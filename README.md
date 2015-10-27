@@ -8,14 +8,11 @@ The object database implementation is optimized for handling large quantities of
 
 ### REQUIREMENTS
 
-* Git ( tested with 1.8.3.4 )
-* Python Nose - used for running the tests
-    -  Tested with nose 1.3.0
-* Mock by Michael Foord used for tests
-    - Tested with 1.0.1
-* Coverage - used for tests coverage
+GitPython needs the `git` executable to be installed on the system and available in your `PATH` for most operations. If it is not in your `PATH`, you can help GitPython find it by setting the `GIT_PYTHON_GIT_EXECUTABLE=<path/to/git>` environment variable.
 
-The list of dependencies are listed in /requirements.txt and /test-requirements.txt. The installer takes care of installing them for you though.
+* Git (1.7.x or newer)
+
+The list of dependencies are listed in `./requirements.txt` and `./test-requirements.txt`. The installer takes care of installing them for you.
 
 ### INSTALL
 
@@ -50,7 +47,7 @@ Then run:
 
 GitPython's git repo is available on GitHub, which can be browsed at [github](https://github.com/gitpython-developers/GitPython) and cloned like that:
 
-    git clone git://github.com/gitpython-developers/GitPython.git git-python
+    git clone https://github.com/gitpython-developers/GitPython
 
 ### Live Coding
 
@@ -62,8 +59,14 @@ You can watch me fix issues or implement new features [live on Twitch][twitch-ch
 ### INFRASTRUCTURE
 
 * [User Documentation](http://gitpython.readthedocs.org)
-* [Mailing List](http://groups.google.com/group/git-python)
+* [Questions and Answers](http://stackexchange.com/filters/167317/gitpython)
+ * Please post on stackoverflow and use the `gitpython` tag
 * [Issue Tracker](https://github.com/gitpython-developers/GitPython/issues)
+  * Post reproducible bugs and feature requests as a new issue. Please be sure to provide the following information if posting bugs:
+    * GitPython version (e.g. `import git; git.__version__`)
+    * Python version (e.g. `python --version`)
+    * The encountered stack-trace, if applicable
+    * Enough information to allow reproducing the issue
 
 ### LICENSE
 
@@ -71,23 +74,16 @@ New BSD License.  See the LICENSE file.
 
 ### DEVELOPMENT STATUS
 
-[![Build Status](https://travis-ci.org/gitpython-developers/GitPython.svg?branch=0.3)](https://travis-ci.org/gitpython-developers/GitPython)
-[![Coverage Status](https://coveralls.io/repos/gitpython-developers/GitPython/badge.png?branch=master)](https://coveralls.io/r/gitpython-developers/GitPython?branch=master)
+[![Build Status](https://travis-ci.org/gitpython-developers/GitPython.svg)](https://travis-ci.org/gitpython-developers/GitPython)
+[![Code Climate](https://codeclimate.com/github/gitpython-developers/GitPython/badges/gpa.svg)](https://codeclimate.com/github/gitpython-developers/GitPython)
 [![Documentation Status](https://readthedocs.org/projects/gitpython/badge/?version=stable)](https://readthedocs.org/projects/gitpython/?badge=stable)
+[![Issue Stats](http://www.issuestats.com/github/gitpython-developers/GitPython/badge/pr)](http://www.issuestats.com/github/gitpython-developers/GitPython)
+[![Issue Stats](http://www.issuestats.com/github/gitpython-developers/GitPython/badge/issue)](http://www.issuestats.com/github/gitpython-developers/GitPython)
 
 Now that there seems to be a massive user base, this should be motivation enough to let git-python return to a proper state, which means
 
 * no open pull requests
 * no open issues describing bugs
-
-#### FUTURE GOALS
-
-There has been a lot of work in the master branch, which is the direction I want git-python to go. Namely, it should be able to freely mix and match the back-end used, depending on your requirements and environment.
-
-* make new master work similarly to 0.3, but with the option to swap for at least one additional backend
-* make a 1.0 release
-* add backends as required
-
 
 [twitch-channel]: http://www.twitch.tv/byronimo/profile
 [youtube-playlist]: https://www.youtube.com/playlist?list=PLMHbQxe1e9MnoEcLhn6Yhv5KAvpWkJbL0

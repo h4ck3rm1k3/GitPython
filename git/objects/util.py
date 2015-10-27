@@ -73,7 +73,7 @@ def utctz_to_altz(utctz):
 def altz_to_utctz_str(altz):
     """As above, but inverses the operation, returning a string that can be used
     in commit objects"""
-    utci = -1 * int((altz / 3600) * 100)
+    utci = -1 * int((float(altz) / 3600) * 100)
     utcs = str(abs(utci))
     utcs = "0" * (4 - len(utcs)) + utcs
     prefix = (utci < 0 and '-') or '+'
@@ -216,7 +216,7 @@ class ProcessStreamAdapter(object):
 
 class Traversable(object):
 
-    """Simple interface to perforam depth-first or breadth-first traversals
+    """Simple interface to perform depth-first or breadth-first traversals
     into one direction.
     Subclasses only need to implement one function.
     Instances of the Subclass must be hashable"""

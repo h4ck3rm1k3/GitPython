@@ -42,7 +42,7 @@ class Diffable(object):
 
     def diff(self, other=Index, paths=None, create_patch=False, **kwargs):
         """Creates diffs between two items being trees, trees and index or an
-        index and the working tree.
+        index and the working tree. It will detect renames automatically.
 
         :param other:
             Is the item to compare us with.
@@ -68,8 +68,6 @@ class Diffable(object):
         :return: git.DiffIndex
 
         :note:
-            Rename detection will only work if create_patch is True.
-
             On a bare repository, 'other' needs to be provided as Index or as
             as Tree/Commit, or a git command error will occour"""
         args = list()
@@ -170,11 +168,13 @@ class Diff(object):
 
         a_mode is None
         a_blob is None
+        a_path is None
 
     ``Deleted File``::
 
         b_mode is None
         b_blob is None
+        b_path is None
 
     ``Working Tree Blobs``
 
@@ -202,8 +202,8 @@ class Diff(object):
     NULL_HEX_SHA = "0" * 40
     NULL_BIN_SHA = b"\0" * 20
 
-    __slots__ = ("a_blob", "b_blob", "a_mode", "b_mode", "new_file", "deleted_file",
-                 "rename_from", "rename_to", "diff")
+    __slots__ = ("a_blob", "b_blob", "a_mode", "b_mode", "a_path", "b_path",
+                 "new_file", "deleted_file", "rename_from", "rename_to", "diff")
 
     def __init__(self, repo, a_path, b_path, a_blob_id, b_blob_id, a_mode,
                  b_mode, new_file, deleted_file, rename_from,
@@ -211,6 +211,9 @@ class Diff(object):
 
         self.a_mode = a_mode
         self.b_mode = b_mode
+
+        self.a_path = a_path
+        self.b_path = b_path
 
         if self.a_mode:
             self.a_mode = mode_str_to_int(self.a_mode)
@@ -220,12 +223,12 @@ class Diff(object):
         if a_blob_id is None:
             self.a_blob = None
         else:
-            assert self.a_mode
+            assert self.a_mode is not None
             self.a_blob = Blob(repo, hex_to_bin(a_blob_id), mode=self.a_mode, path=a_path)
         if b_blob_id is None:
             self.b_blob = None
         else:
-            assert self.b_mode
+            assert self.b_mode is not None
             self.b_blob = Blob(repo, hex_to_bin(b_blob_id), mode=self.b_mode, path=b_path)
 
         self.new_file = new_file
